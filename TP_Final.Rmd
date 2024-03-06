@@ -1,0 +1,233 @@
+---
+title: "TP_Final"
+author: "Catalina Zaza"
+date: "2023-01-24"
+output: 
+    prettydoc::html_pretty:
+      theme: hpstr
+      hightlight: github
+
+---
+
+TP integrador Moodulos 1 y 2
+Diplomatura en CSCyHD 2022-2023: Comisión B
+
+
+```{r}
+#install.packages("prettydoc")
+library(prettydoc)
+
+#install.packages("rmdformats")
+library(rmdformats)
+```
+    
+## 1. Departamentos con mayores salarios, expresados en un mapa coroplético
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#descargo los paquetes que necesito para visualizar y manipular las bases de datos
+library(ggplot2)
+library(tidyverse)
+library(sf)
+library(openxlsx)
+library(viridis)
+library(viridisLite)
+library(dplyr)
+
+```
+
+Para el armado de este trabajo se utilizó de las cuatro tipo de
+aperturas disponibles en el dataset, la cuarta, que contiene la
+totalidad de las relaciones laborales asalariadas registradas en la
+economía (incluyendo tanto al total de las empresas privadas como las
+empresas con participación estatal mayoritaria); además de abarcar a
+todo el sector público)
+
+![Fuente: Detalle de la metodología empleada para la construccion de
+series. Ministerio de Desarrollo Productivo de la Nacion Argentina
+(MDP)](base/grafico_metodologico.png)
+
+```{r echo=TRUE}
+#descargo las bases de datos a utilizar
+departamentos <- read_sf("base/departamentos_arg.geojson")
+salarios <- read_csv("base/w_mean_depto_total_letra.csv")
+diccionarios_depto <- read.csv('base/diccionario_cod_depto.csv')
+diccionarios_clases <- read.csv('base/diccionario_clae2.csv')
+
+```
+
+## 1) Identificar los departamentos con mayores salarios, expresados en un mapa coroplético
+
+```{r echo=TRUE}
+#hago una mega base con toda la información disponible.
+base_completa <- salarios %>% 
+  left_join(diccionarios_depto) %>% 
+  left_join(diccionarios_clases)
+
+```
+
+```{r echo=TRUE}
+#examino las clases de la variable codigo_departamento_indec 
+class(departamentos$codigo_departamento_indec) #character
+class(base_completa$codigo_departamento_indec) #numeric
+
+#como son 2 clases diferentes, paso todo a numeric para que sea posible joinear despues
+
+departamentos <- departamentos %>% 
+  mutate(codigo_departamento_indec = as.numeric(codigo_departamento_indec))
+
+```
+
+```{r echo=TRUE}
+#transformo y limpio mi base 
+base_completa <- base_completa %>% 
+  select(fecha, codigo_departamento_indec, w_mean) %>% #descarto las columnas que no utilizo
+  filter(!is.na(codigo_departamento_indec)) %>% #quito los NA
+  filter(fecha=="2022-11-01") %>% #me quedo con la fecha mas actual
+  group_by(codigo_departamento_indec) %>%  #agrupo
+  summarise(media = mean(w_mean)) #media de salarios por departamento
+```
+
+```{r echo=TRUE}
+#join de ambas bases
+map <- departamentos %>%
+  inner_join(base_completa) 
+```
+
+```{r echo=TRUE}
+options(scipen=999) #evita la notacion cientifica en el grafico
+
+#grafico
+ggplot(map) +
+  geom_sf(aes(fill = media), color = "black")+
+  scale_fill_viridis_c() +
+  labs(title = "Media salarial por departamento en Argentina",
+       subtitle = "Datos de enero 2022",
+       fill = "Media salarial", 
+       caption= "Elaboración propia en base al MDP, 2022") + 
+  theme_void()
+```
+
+## 2. Grafico de barras expresando los 5 sectores de actividad con salarios más bajos
+
+```{r echo=TRUE}
+#renombro la base que utilicé en el ejercicio anterior
+diccionario_clae <- read.csv("base/diccionario_clae2.csv")
+depto_letra <- read_csv("base/w_mean_depto_total_letra.csv") 
+```
+
+```{r echo=TRUE}
+#Join de letras de actividad con su descripcion
+sectores_actividad <- left_join(x=depto_letra, y=diccionario_clae) %>%
+  rename(sector_actividad=letra_desc) #cambio el nombre de la columna para que sea mas facil manipular
+```
+
+```{r echo=TRUE}
+sectores_actividad_bajos <- sectores_actividad%>% 
+  select("fecha", "codigo_departamento_indec", "id_provincia_indec", "letra", "w_mean", "sector_actividad") %>% #descarto las columnas a no utilizar
+  group_by(sector_actividad) %>%
+  summarise(media=mean(w_mean)) %>% #unifico los sectores de actividad
+  filter(!is.na(sector_actividad)) %>% #quito los NA
+  arrange(media) %>% #ordeno los valores
+  mutate(top_bajos=row_number()) %>% #creo un ranking
+  filter((top_bajos<=5)) %>% #me quedo con el top 5 de salarios mas bajos por sector
+  mutate(sector_actividad=case_when(sector_actividad==" SERVICIOS DE ALOJAMIENTO Y SERVICIOS DE COMIDA"~"ALOJAMIENTO Y COMIDA",
+                                  sector_actividad==" SERVICIOS INMOBILIARIOS"~sector_actividad,
+                                  sector_actividad==" ACTIVIDADES ADMINISTRATIVAS Y SERVICIOS DE APOYO"~"ACTIVIDADES ADMINISTRATIVAS",
+                                  sector_actividad==" SERVICIOS  ARTÍSTICOS, CULTURALES, DEPORTIVOS  Y DE ESPARCIMIENTO"~"DEPORTE Y CULTURA",
+                                  sector_actividad==" ENSEÑANZA"~sector_actividad)) #organizo las etiquetas de cada sector para que sea mas legible
+ 
+
+```
+
+```{r echo=TRUE}
+#Grafico
+ggplot(sectores_actividad_bajos, aes (x=fct_reorder(sector_actividad,top_bajos),
+                                      y=media, 
+                                      fill = sector_actividad))+ #ordeno los valores de x de menor a mayor para que sea más clara su lectura
+  geom_col()+
+  geom_text(aes(label=round(media), hjust = 0.5))+
+  theme_minimal()+
+  scale_color_viridis_d()+
+  theme(axis.text.x=element_blank())+ 
+  theme(axis.text.y=element_blank())+#descarto el texto del eje x e y para que sea mas simple de visualizar el grafico
+  labs(title="Salarios más bajos",
+       subtitle="Discriminados por los 5 sectores de actividad menos rentados",
+       fill="Sector de actividad",
+       x=NULL,
+       y="Salario promedio",
+       caption="Elaboración propia en base a datos del MDP, 2022")
+  
+```
+
+## 3. Elija 4 sectores de actividad (los cuales se distinguen por la letra) o grupos de sectores y visualice la evolución de los salarios a lo largo de los años disponibles
+
+```{r echo=TRUE}
+library(lubridate) #para maniobrar fechas
+library(gganimate) #para hacer graficos animados
+```
+
+```{r echo=TRUE}
+#vuelvo a utilizar mi base de datos "sectores_actividad"
+evolucion_salarios <- sectores_actividad %>% 
+  mutate(anio=year(fecha)) %>% #utilizo lubridate para extraer solo el año de cada fecha
+  group_by(anio, letra, sector_actividad) %>% #agrupo por fecha y por letra
+  summarise(media=round(mean(w_mean, digits = 0))) %>% #hago la media por año y por sector  
+  mutate(sector_actividad = case_when(sector_actividad== " AGRICULTURA, GANADERÍA, CAZA, SILVICULTURA Y PESCA" ~ "AGROINDUSTRIA",
+                                      sector_actividad=="EXPLOTACION DE MINAS Y CANTERAS" ~ "MINERIA",
+                                      sector_actividad==" INDUSTRIA MANUFACTURERA" ~ "MANUFACTURA",
+                                      sector_actividad== " SUMINISTRO DE ELECTRICIDAD, GAS, VAPOR Y AIRE ACONDICIONADO" ~ "ENERGIA")) %>% #simplifico las etiquetas de los sectores que voy a usar
+  filter(letra %in% c("A","B", "C", "D")) #selecciono 4 sectores de actividad por la letra que coincide con el sector
+
+```
+
+```{r echo=TRUE}
+#grafico 
+ggplot(evolucion_salarios)+
+  geom_col(aes(x=media, 
+               y=sector_actividad, 
+               fill=sector_actividad), 
+           show.legend = FALSE)+
+  geom_text(aes(x=media, 
+                y=sector_actividad, 
+                label=sector_actividad, 
+                hjust = 0), 
+            size=2)+
+  theme_minimal()+
+  #theme(axis.text.x=element_blank())+ 
+  theme(axis.text.y =element_blank())+#saco el eje Y para que quede mas claro
+  facet_wrap(vars(anio))+ #ordeno para que muestre por año
+  labs(x="",
+       y= "",
+       title= "Evolución de salarios",
+       subtitle = "Con datos disponibles del periodo 2014-2022",
+       caption="Elaboración propia en base a datos del MDP, 2022")+
+  theme(plot.title = element_text(size = 20, hjust=0.1))+ #hago correcciones a la ubicacion del titulo y subtitulo
+  theme(plot.subtitle = element_text(size = 13, hjust=0.1))
+```
+
+```{r echo=TRUE}
+#grafico animado 
+ggplot(evolucion_salarios, aes(group=sector_actividad))+
+  geom_col(aes(x=media, 
+               y=sector_actividad, 
+               fill=sector_actividad), 
+           show.legend = FALSE)+
+  geom_text(aes(x=media, 
+                y=sector_actividad, 
+                label=media, #en este grafico no me sale redondeado como en la base
+                hjust = 0))+
+  theme_minimal()+
+  theme(axis.text.x=element_blank())+ 
+  labs(x="",
+       y= "",
+       title= "Evolución de salarios",
+       subtitle = "Con datos disponibles del  año: {frame_time}", 
+       caption="Elaboración propia en base a datos del MDP, 2022")+
+  theme(plot.title = element_text(size = 20))+ 
+  theme(plot.subtitle = element_text(size = 13))+
+  transition_time(round(anio, digits = 0)) #aca traté de redondear pero no me salio
+       
+       
+      
+```
